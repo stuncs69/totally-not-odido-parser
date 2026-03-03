@@ -1,12 +1,12 @@
 :root {
-  --bg: #f4f8ff;
-  --panel: rgba(255, 255, 255, 0.9);
-  --line: #dce7fb;
-  --text: #13203b;
-  --muted: #536282;
-  --accent: #0b76ff;
-  --accent-2: #11b7a3;
-  --danger: #b4355a;
+  --bg: #f3f5f7;
+  --panel: #ffffff;
+  --line: #d7dde5;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --accent: #1f5fbf;
+  --accent-soft: #e9f0fb;
+  --danger: #be3c4a;
 }
 
 * {
@@ -20,34 +20,10 @@ body {
 }
 
 body {
-  font-family: "Space Grotesk", sans-serif;
+  font-family: "IBM Plex Sans", sans-serif;
   color: var(--text);
-  background: radial-gradient(circle at 20% 20%, #edf5ff 0, #edf5ff 30%, #f4f8ff 60%, #f8faff 100%);
+  background: var(--bg);
   padding: 1.25rem;
-}
-
-.bg-glow {
-  position: fixed;
-  pointer-events: none;
-  border-radius: 999px;
-  filter: blur(70px);
-  z-index: -1;
-}
-
-.bg-glow-1 {
-  width: 220px;
-  height: 220px;
-  left: 4%;
-  top: 12%;
-  background: rgba(17, 183, 163, 0.22);
-}
-
-.bg-glow-2 {
-  width: 280px;
-  height: 280px;
-  right: 6%;
-  top: 8%;
-  background: rgba(11, 118, 255, 0.17);
 }
 
 h1,
@@ -86,17 +62,17 @@ code {
 
 .nav-link {
   text-decoration: none;
-  border: 1px solid #ccd9f2;
-  border-radius: 10px;
-  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.68rem;
   color: var(--text);
   background: #fff;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .nav-link:hover {
-  border-color: #a9c3ef;
-  background: #f7fbff;
+  border-color: #b6c0ce;
+  background: #f8fafc;
 }
 
 .health {
@@ -114,7 +90,7 @@ code {
 }
 
 .dot.ok {
-  background: var(--accent-2);
+  background: #1f8b4d;
 }
 
 .layout {
@@ -126,9 +102,8 @@ code {
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: 0 15px 35px rgba(42, 67, 111, 0.08);
-  backdrop-filter: blur(8px);
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
 .filters {
@@ -148,8 +123,8 @@ label {
 input,
 select,
 button {
-  border: 1px solid #ccd9f2;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   padding: 0.6rem 0.7rem;
   font: inherit;
 }
@@ -162,8 +137,8 @@ select {
 button {
   cursor: pointer;
   color: #fff;
-  background: linear-gradient(110deg, var(--accent), #318dff);
-  font-weight: 600;
+  background: var(--accent);
+  font-weight: 500;
 }
 
 button.ghost {
@@ -176,11 +151,6 @@ button.ghost {
   grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
   margin-top: 0.2rem;
-}
-
-.hint {
-  color: var(--muted);
-  font-size: 0.88rem;
 }
 
 .content {
@@ -212,16 +182,14 @@ button.ghost {
 }
 
 .stat h3 {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   color: var(--muted);
   margin-bottom: 0.35rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .stat p {
-  font-size: 1.35rem;
-  font-weight: 700;
+  font-size: 1.28rem;
+  font-weight: 600;
 }
 
 .table-panel {
@@ -243,7 +211,7 @@ button.ghost {
 
 .table-wrap {
   overflow: auto;
-  border-radius: 12px;
+  border-radius: 8px;
   border: 1px solid var(--line);
   background: #fff;
   max-height: 66vh;
@@ -258,7 +226,7 @@ table {
 th,
 td {
   padding: 0.62rem 0.6rem;
-  border-bottom: 1px solid #ecf2ff;
+  border-bottom: 1px solid #e8edf3;
   text-align: left;
   font-size: 0.9rem;
 }
@@ -266,12 +234,12 @@ td {
 th {
   position: sticky;
   top: 0;
-  background: #f6f9ff;
+  background: #f8fafc;
   z-index: 2;
 }
 
 tbody tr:hover {
-  background: #f7fbff;
+  background: #f8fafc;
 }
 
 tbody tr {
@@ -297,22 +265,17 @@ tbody tr {
   color: var(--muted);
 }
 
-.result-note {
-  color: var(--muted);
-  font-size: 0.88rem;
-}
-
 .bar-track {
   width: 100%;
   height: 0.55rem;
   border-radius: 999px;
-  background: #e8f1ff;
+  background: #ebeff5;
   overflow: hidden;
 }
 
 .bar-fill {
   height: 100%;
-  background: linear-gradient(110deg, var(--accent), var(--accent-2));
+  background: var(--accent);
   border-radius: 999px;
 }
 
@@ -328,12 +291,12 @@ button.mini {
 dialog {
   width: min(960px, 92vw);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 10px;
   padding: 0.8rem;
 }
 
 dialog::backdrop {
-  background: rgba(19, 32, 59, 0.55);
+  background: rgba(17, 24, 39, 0.45);
 }
 
 .dialog-head {
@@ -345,12 +308,12 @@ dialog::backdrop {
 
 pre {
   margin: 0;
-  background: #f7f9ff;
-  border-radius: 12px;
+  background: #f8fafc;
+  border-radius: 8px;
   padding: 0.8rem;
   max-height: 70vh;
   overflow: auto;
-  border: 1px solid #e3eaff;
+  border: 1px solid #e3e8ef;
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.82rem;
 }

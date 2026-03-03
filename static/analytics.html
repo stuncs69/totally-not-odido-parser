@@ -3,19 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Dataset Analytics</title>
+  <title>Analytics</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="bg-glow bg-glow-1"></div>
-  <div class="bg-glow bg-glow-2"></div>
   <header class="topbar">
     <div>
-      <h1>Dataset Analytics</h1>
-      <p class="sub">Dynamic value distributions and exact counts from indexed data</p>
+      <h1>Analytics</h1>
     </div>
     <div class="top-actions">
       <a class="nav-link" href="/">Explorer</a>
@@ -50,9 +47,6 @@
       <div class="actions">
         <button id="refresh">Refresh</button>
         <button id="reset" class="ghost">Reset</button>
-      </div>
-      <div class="hint">
-        Use <code>(empty)</code> in Exact Count to count blank values.
       </div>
     </aside>
 
@@ -99,15 +93,14 @@
 
       <article class="panel count-panel">
         <div class="table-head">
-          <h2>Exact Value Count</h2>
-          <div class="result-note">Counts exact normalized value for the selected field.</div>
+          <h2>Exact Count</h2>
         </div>
         <div class="count-form">
           <select id="count-field"></select>
-          <input id="count-value" type="text" placeholder="value (or (empty))" />
-          <button id="count-run">Count Value</button>
+          <input id="count-value" type="text" placeholder="Value" />
+          <button id="count-run">Count</button>
         </div>
-        <p id="count-result" class="count-result">Choose a field and value, then click Count Value.</p>
+        <p id="count-result" class="count-result">Select a field and value.</p>
       </article>
     </section>
   </main>

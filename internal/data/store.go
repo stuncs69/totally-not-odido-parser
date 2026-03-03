@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +96,51 @@ type Health struct {
 	DBPath      string `json:"db_path"`
 	Rows        int64  `json:"rows"`
 	IndexedAt   string `json:"indexed_at"`
+}
+
+type AnalyticsField struct {
+	Name  string `json:"name"`
+	Label string `json:"label"`
+}
+
+type AnalyticsBucket struct {
+	Value      string  `json:"value"`
+	Count      int64   `json:"count"`
+	Percentage float64 `json:"percentage"`
+}
+
+type AnalyticsDistribution struct {
+	Field         string            `json:"field"`
+	Filter        string            `json:"filter"`
+	Limit         int               `json:"limit"`
+	TotalRows     int64             `json:"total_rows"`
+	MatchedRows   int64             `json:"matched_rows"`
+	DistinctCount int64             `json:"distinct_count"`
+	Buckets       []AnalyticsBucket `json:"buckets"`
+}
+
+type AnalyticsCountResult struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
+	Count int64  `json:"count"`
+}
+
+type analyticsFieldSpec struct {
+	Name  string
+	Label string
+	Expr  string
+}
+
+var analyticsExcludedColumns = map[string]struct{}{
+	"row_num":     {},
+	"file_offset": {},
+	"line_length": {},
+}
+
+var analyticsLabelOverrides = map[string]string{
+	"id":         "ID",
+	"is_active":  "Active Flag",
+	"is_deleted": "Deleted Flag",
 }
 
 type sourceRecord struct {
@@ -798,6 +844,209 @@ func (s *Store) distinctValues(ctx context.Context, field string, limit int) ([]
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) AnalyticsFields(ctx context.Context) ([]AnalyticsField, error) {
+	specs, err := s.analyticsFieldSpecs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]AnalyticsField, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, AnalyticsField{Name: spec.Name, Label: spec.Label})
+	}
+	return out, nil
+}
+
+func (s *Store) AnalyticsDistribution(ctx context.Context, field, filter string, limit int) (AnalyticsDistribution, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	spec, err := s.analyticsFieldSpec(ctx, field)
+	if err != nil {
+		return AnalyticsDistribution{}, err
+	}
+
+	filter = strings.TrimSpace(filter)
+	whereSQL := ""
+	filterArgs := make([]any, 0, 1)
+	if filter != "" {
+		whereSQL = " WHERE value LIKE ?"
+		filterArgs = append(filterArgs, "%"+filter+"%")
+	}
+
+	sourceSQL := fmt.Sprintf("SELECT %s AS value FROM records", spec.Expr)
+
+	var totalRows int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM records`).Scan(&totalRows); err != nil {
+		return AnalyticsDistribution{}, err
+	}
+
+	matchedSQL := fmt.Sprintf(
+		"SELECT COUNT(1) FROM (%s) values_view%s",
+		sourceSQL,
+		whereSQL,
+	)
+	var matchedRows int64
+	if err := s.db.QueryRowContext(ctx, matchedSQL, filterArgs...).Scan(&matchedRows); err != nil {
+		return AnalyticsDistribution{}, err
+	}
+
+	distinctSQL := fmt.Sprintf(
+		"SELECT COUNT(1) FROM (SELECT value FROM (%s) values_view%s GROUP BY value) grouped_values",
+		sourceSQL,
+		whereSQL,
+	)
+	var distinctCount int64
+	if err := s.db.QueryRowContext(ctx, distinctSQL, filterArgs...).Scan(&distinctCount); err != nil {
+		return AnalyticsDistribution{}, err
+	}
+
+	distributionSQL := fmt.Sprintf(`
+		SELECT value, COUNT(1) AS count
+		FROM (%s) values_view
+		%s
+		GROUP BY value
+		ORDER BY count DESC, value ASC
+		LIMIT ?`, sourceSQL, whereSQL)
+	args := append(append(make([]any, 0, len(filterArgs)+1), filterArgs...), limit)
+	rows, err := s.db.QueryContext(ctx, distributionSQL, args...)
+	if err != nil {
+		return AnalyticsDistribution{}, err
+	}
+	defer rows.Close()
+
+	out := AnalyticsDistribution{
+		Field:         spec.Name,
+		Filter:        filter,
+		Limit:         limit,
+		TotalRows:     totalRows,
+		MatchedRows:   matchedRows,
+		DistinctCount: distinctCount,
+		Buckets:       make([]AnalyticsBucket, 0, limit),
+	}
+
+	for rows.Next() {
+		var bucket AnalyticsBucket
+		if err := rows.Scan(&bucket.Value, &bucket.Count); err != nil {
+			return AnalyticsDistribution{}, err
+		}
+		if out.MatchedRows > 0 {
+			bucket.Percentage = (float64(bucket.Count) / float64(out.MatchedRows)) * 100
+		}
+		out.Buckets = append(out.Buckets, bucket)
+	}
+
+	if err := rows.Err(); err != nil {
+		return AnalyticsDistribution{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) AnalyticsCount(ctx context.Context, field, value string) (AnalyticsCountResult, error) {
+	spec, err := s.analyticsFieldSpec(ctx, field)
+	if err != nil {
+		return AnalyticsCountResult{}, err
+	}
+
+	query := fmt.Sprintf(
+		"SELECT COUNT(1) FROM (SELECT %s AS value FROM records) values_view WHERE value = ?",
+		spec.Expr,
+	)
+
+	var count int64
+	if err := s.db.QueryRowContext(ctx, query, value).Scan(&count); err != nil {
+		return AnalyticsCountResult{}, err
+	}
+	return AnalyticsCountResult{
+		Field: spec.Name,
+		Value: value,
+		Count: count,
+	}, nil
+}
+
+func (s *Store) analyticsFieldSpec(ctx context.Context, field string) (analyticsFieldSpec, error) {
+	field = strings.ToLower(strings.TrimSpace(field))
+	specs, err := s.analyticsFieldSpecs(ctx)
+	if err != nil {
+		return analyticsFieldSpec{}, err
+	}
+	for _, spec := range specs {
+		if spec.Name == field {
+			return spec, nil
+		}
+	}
+	return analyticsFieldSpec{}, fmt.Errorf("unsupported field %q", field)
+}
+
+func (s *Store) analyticsFieldSpecs(ctx context.Context) ([]analyticsFieldSpec, error) {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(records)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	specs := make([]analyticsFieldSpec, 0, 12)
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return nil, err
+		}
+		if _, skip := analyticsExcludedColumns[name]; skip {
+			continue
+		}
+
+		specs = append(specs, analyticsFieldSpec{
+			Name:  name,
+			Label: analyticsFieldLabel(name),
+			Expr:  analyticsValueExpr(name),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(specs, func(i, j int) bool {
+		return specs[i].Name < specs[j].Name
+	})
+	return specs, nil
+}
+
+func analyticsFieldLabel(name string) string {
+	if override, ok := analyticsLabelOverrides[name]; ok {
+		return override
+	}
+
+	parts := strings.Split(name, "_")
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
+}
+
+func analyticsValueExpr(column string) string {
+	quoted := analyticsQuoteIdent(column)
+	if column == "is_active" || column == "is_deleted" {
+		return fmt.Sprintf("CASE WHEN %s = 1 THEN 'true' ELSE 'false' END", quoted)
+	}
+	return fmt.Sprintf("COALESCE(NULLIF(TRIM(CAST(%s AS TEXT)), ''), '(empty)')", quoted)
+}
+
+func analyticsQuoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 func parseBool(v string) bool {

@@ -53,6 +53,10 @@ func main() {
 	mux.HandleFunc("/api/facets", srv.handleFacets)
 	mux.HandleFunc("/api/records", srv.handleRecords)
 	mux.HandleFunc("/api/records/", srv.handleRecordDetail)
+	mux.HandleFunc("/api/analytics/fields", srv.handleAnalyticsFields)
+	mux.HandleFunc("/api/analytics/distribution", srv.handleAnalyticsDistribution)
+	mux.HandleFunc("/api/analytics/count", srv.handleAnalyticsCount)
+	mux.HandleFunc("/analytics", srv.handleAnalyticsPage)
 	mux.Handle("/", http.FileServer(http.Dir("static")))
 
 	httpServer := &http.Server{
@@ -216,6 +220,102 @@ func (s *apiServer) handleRecordDetail(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"row_num":` + strconv.FormatInt(rowNum, 10) + `,"data":`))
 	_, _ = w.Write(payload)
 	_, _ = w.Write([]byte(`}`))
+}
+
+func (s *apiServer) handleAnalyticsPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if r.URL.Path != "/analytics" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	http.ServeFile(w, r, "static/analytics.html")
+}
+
+func (s *apiServer) handleAnalyticsFields(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	fields, err := s.store.AnalyticsFields(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fields": fields,
+	})
+}
+
+func (s *apiServer) handleAnalyticsDistribution(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	field := strings.TrimSpace(r.URL.Query().Get("field"))
+	if field == "" {
+		writeError(w, http.StatusBadRequest, "missing field")
+		return
+	}
+
+	limit := 25
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = parsed
+	}
+
+	filter := strings.TrimSpace(r.URL.Query().Get("filter"))
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := s.store.AnalyticsDistribution(ctx, field, filter, limit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *apiServer) handleAnalyticsCount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	field := strings.TrimSpace(r.URL.Query().Get("field"))
+	if field == "" {
+		writeError(w, http.StatusBadRequest, "missing field")
+		return
+	}
+
+	if _, ok := r.URL.Query()["value"]; !ok {
+		writeError(w, http.StatusBadRequest, "missing value")
+		return
+	}
+	value := r.URL.Query().Get("value")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	result, err := s.store.AnalyticsCount(ctx, field, value)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dataset Analytics</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <header class="topbar">
+    <div>
+      <h1>Dataset Analytics</h1>
+      <p class="sub">Dynamic value distributions and exact counts from indexed data</p>
+    </div>
+    <div class="top-actions">
+      <a class="nav-link" href="/">Explorer</a>
+      <div class="health">
+        <span class="dot" id="health-dot"></span>
+        <span id="health-text">checking backend...</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="analytics-layout">
+    <aside class="panel analytics-controls">
+      <h2>Distribution Query</h2>
+      <label>
+        Field
+        <select id="field"></select>
+      </label>
+      <label>
+        Contains
+        <input id="filter" type="text" placeholder="optional value filter" />
+      </label>
+      <label>
+        Top Values
+        <select id="limit">
+          <option value="10">10</option>
+          <option value="25" selected>25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
+        </select>
+      </label>
+      <div class="actions">
+        <button id="refresh">Refresh</button>
+        <button id="reset" class="ghost">Reset</button>
+      </div>
+      <div class="hint">
+        Use <code>(empty)</code> in Exact Count to count blank values.
+      </div>
+    </aside>
+
+    <section class="content">
+      <div class="stats-grid analytics-summary">
+        <article class="panel stat">
+          <h3>Total Rows</h3>
+          <p id="ana-total">-</p>
+        </article>
+        <article class="panel stat">
+          <h3>Matched Rows</h3>
+          <p id="ana-matched">-</p>
+        </article>
+        <article class="panel stat">
+          <h3>Distinct Values</h3>
+          <p id="ana-distinct">-</p>
+        </article>
+        <article class="panel stat">
+          <h3>Field</h3>
+          <p id="ana-field">-</p>
+        </article>
+      </div>
+
+      <article class="panel table-panel">
+        <div class="table-head">
+          <h2>Value Distribution</h2>
+          <div id="dist-meta">Loading...</div>
+        </div>
+        <div class="table-wrap">
+          <table class="analytics-table">
+            <thead>
+              <tr>
+                <th>Value</th>
+                <th>Count</th>
+                <th>Share</th>
+                <th>Visual</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="dist-rows"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="panel count-panel">
+        <div class="table-head">
+          <h2>Exact Value Count</h2>
+          <div class="result-note">Counts exact normalized value for the selected field.</div>
+        </div>
+        <div class="count-form">
+          <select id="count-field"></select>
+          <input id="count-value" type="text" placeholder="value (or (empty))" />
+          <button id="count-run">Count Value</button>
+        </div>
+        <p id="count-result" class="count-result">Choose a field and value, then click Count Value.</p>
+      </article>
+    </section>
+  </main>
+
+  <script src="/analytics.js" defer></script>
+</body>
+</html>

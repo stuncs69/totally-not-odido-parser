@@ -75,7 +75,7 @@ async function loadHealth() {
   try {
     const data = await api("/api/health");
     el.healthDot.classList.add("ok");
-    el.healthText.textContent = `ready · ${number(data.rows)} indexed`;
+    el.healthText.textContent = `ready - ${number(data.rows)} indexed`;
   } catch (err) {
     el.healthDot.classList.remove("ok");
     el.healthText.textContent = `backend error: ${err.message}`;

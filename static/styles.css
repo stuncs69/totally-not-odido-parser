@@ -78,6 +78,27 @@ code {
   margin-bottom: 1rem;
 }
 
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.nav-link {
+  text-decoration: none;
+  border: 1px solid #ccd9f2;
+  border-radius: 10px;
+  padding: 0.45rem 0.7rem;
+  color: var(--text);
+  background: #fff;
+  font-weight: 600;
+}
+
+.nav-link:hover {
+  border-color: #a9c3ef;
+  background: #f7fbff;
+}
+
 .health {
   display: flex;
   align-items: center;
@@ -167,6 +188,19 @@ button.ghost {
   gap: 1rem;
 }
 
+.analytics-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 1rem;
+}
+
+.analytics-controls {
+  padding: 1rem;
+  display: grid;
+  gap: 0.7rem;
+  height: fit-content;
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(120px, 1fr));
@@ -192,6 +226,12 @@ button.ghost {
 
 .table-panel {
   padding: 0.8rem;
+}
+
+.count-panel {
+  padding: 0.8rem;
+  display: grid;
+  gap: 0.8rem;
 }
 
 .table-head {
@@ -246,6 +286,45 @@ tbody tr {
   margin-top: 0.7rem;
 }
 
+.count-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr auto;
+  gap: 0.6rem;
+}
+
+.count-result {
+  margin: 0;
+  color: var(--muted);
+}
+
+.result-note {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.bar-track {
+  width: 100%;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: #e8f1ff;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: linear-gradient(110deg, var(--accent), var(--accent-2));
+  border-radius: 999px;
+}
+
+.mono {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+button.mini {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.8rem;
+}
+
 dialog {
   width: min(960px, 92vw);
   border: 1px solid var(--line);
@@ -281,6 +360,10 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .analytics-layout {
+    grid-template-columns: 1fr;
+  }
+
   .stats-grid {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
   }
@@ -298,5 +381,14 @@ pre {
   .topbar {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .top-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .count-form {
+    grid-template-columns: 1fr;
   }
 }

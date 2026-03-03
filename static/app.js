@@ -19,6 +19,10 @@ const el = {
   apply: document.getElementById("apply"),
   reset: document.getElementById("reset"),
   q: document.getElementById("q"),
+  jsonPath: document.getElementById("json_path"),
+  jsonValue: document.getElementById("json_value"),
+  jsonOp: document.getElementById("json_op"),
+  jsonPaths: document.getElementById("json-paths"),
   type: document.getElementById("type"),
   status: document.getElementById("status"),
   country: document.getElementById("country"),
@@ -56,6 +60,13 @@ function queryString() {
   for (const field of fields) {
     const value = el[field].value.trim();
     if (value) p.set(field, value);
+  }
+  const jsonPath = el.jsonPath.value.trim();
+  const jsonValue = el.jsonValue.value.trim();
+  if (jsonPath) p.set("json_path", jsonPath);
+  if (jsonValue) p.set("json_value", jsonValue);
+  if (jsonPath || jsonValue) {
+    p.set("json_op", el.jsonOp.value || "eq");
   }
   p.set("limit", String(state.limit));
   p.set("offset", String(state.offset));
@@ -102,6 +113,21 @@ async function loadFacets() {
     setSelectOptions(el.country, facets.countries || []);
   } catch (err) {
     el.resultMeta.textContent = `facets failed: ${err.message}`;
+  }
+}
+
+async function loadJSONPaths() {
+  try {
+    const payload = await api("/api/json/paths?limit=300");
+    const paths = payload.paths || [];
+    el.jsonPaths.innerHTML = "";
+    for (const path of paths) {
+      const opt = document.createElement("option");
+      opt.value = path;
+      el.jsonPaths.appendChild(opt);
+    }
+  } catch (err) {
+    // Keep UX functional even when path suggestions fail.
   }
 }
 
@@ -167,6 +193,9 @@ async function openDetail(rowNum) {
 
 function resetFilters() {
   el.q.value = "";
+  el.jsonPath.value = "";
+  el.jsonValue.value = "";
+  el.jsonOp.value = "eq";
   el.type.value = "";
   el.status.value = "";
   el.country.value = "";
@@ -211,9 +240,23 @@ el.q.addEventListener("keydown", (evt) => {
   }
 });
 
+el.jsonPath.addEventListener("keydown", (evt) => {
+  if (evt.key === "Enter") {
+    state.offset = 0;
+    loadRecords();
+  }
+});
+
+el.jsonValue.addEventListener("keydown", (evt) => {
+  if (evt.key === "Enter") {
+    state.offset = 0;
+    loadRecords();
+  }
+});
+
 async function boot() {
   await loadHealth();
-  await Promise.all([loadStats(), loadFacets()]);
+  await Promise.all([loadStats(), loadFacets(), loadJSONPaths()]);
   await loadRecords();
 }
 

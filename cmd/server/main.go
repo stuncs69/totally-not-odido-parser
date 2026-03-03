@@ -51,6 +51,7 @@ func main() {
 	mux.HandleFunc("/api/health", srv.handleHealth)
 	mux.HandleFunc("/api/stats", srv.handleStats)
 	mux.HandleFunc("/api/facets", srv.handleFacets)
+	mux.HandleFunc("/api/json/paths", srv.handleJSONPaths)
 	mux.HandleFunc("/api/records", srv.handleRecords)
 	mux.HandleFunc("/api/records/", srv.handleRecordDetail)
 	mux.HandleFunc("/api/analytics/fields", srv.handleAnalyticsFields)
@@ -135,6 +136,33 @@ func (s *apiServer) handleFacets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, facets)
 }
 
+func (s *apiServer) handleJSONPaths(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	limit := 200
+	if v := r.URL.Query().Get("limit"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = parsed
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	paths, err := s.store.JSONPaths(ctx, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"paths": paths})
+}
+
 func (s *apiServer) handleRecords(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -163,6 +191,12 @@ func (s *apiServer) handleRecords(w http.ResponseWriter, r *http.Request) {
 		offset = p
 	}
 
+	jsonOp := strings.ToLower(strings.TrimSpace(q.Get("json_op")))
+	if jsonOp != "" && jsonOp != "eq" && jsonOp != "contains" {
+		writeError(w, http.StatusBadRequest, "invalid json_op")
+		return
+	}
+
 	params := data.QueryParams{
 		Q:            strings.TrimSpace(q.Get("q")),
 		Type:         strings.TrimSpace(q.Get("type")),
@@ -172,6 +206,9 @@ func (s *apiServer) handleRecords(w http.ResponseWriter, r *http.Request) {
 		Active:       strings.TrimSpace(q.Get("active")),
 		ModifiedFrom: strings.TrimSpace(q.Get("modified_from")),
 		ModifiedTo:   strings.TrimSpace(q.Get("modified_to")),
+		JSONPath:     strings.TrimSpace(q.Get("json_path")),
+		JSONValue:    strings.TrimSpace(q.Get("json_value")),
+		JSONOp:       jsonOp,
 		Sort:         strings.TrimSpace(q.Get("sort")),
 		Limit:        limit,
 		Offset:       offset,

@@ -31,6 +31,22 @@
         <input id="q" type="text" placeholder="Name, ID, city..." />
       </label>
       <label>
+        JSON Path
+        <input id="json_path" type="text" list="json-paths" placeholder="BillingCity or nested.path" />
+        <datalist id="json-paths"></datalist>
+      </label>
+      <label>
+        JSON Value
+        <input id="json_value" type="text" placeholder="Value in JSON field" />
+      </label>
+      <label>
+        JSON Match
+        <select id="json_op">
+          <option value="eq">Exact</option>
+          <option value="contains">Contains</option>
+        </select>
+      </label>
+      <label>
         Type
         <select id="type">
           <option value="">Any</option>

@@ -10,15 +10,16 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-const indexVersion = "2"
+const indexVersion = "3"
 
 type Store struct {
 	db          *sql.DB
@@ -53,6 +54,9 @@ type QueryParams struct {
 	Active       string
 	ModifiedFrom string
 	ModifiedTo   string
+	JSONPath     string
+	JSONValue    string
+	JSONOp       string
 	Sort         string
 	Limit        int
 	Offset       int
@@ -131,10 +135,10 @@ type analyticsFieldSpec struct {
 	Expr  string
 }
 
-var analyticsExcludedColumns = map[string]struct{}{
-	"row_num":     {},
-	"file_offset": {},
-	"line_length": {},
+type jsonIndexedField struct {
+	Path      string
+	ValueText string
+	ValueType string
 }
 
 var analyticsLabelOverrides = map[string]string{
@@ -345,6 +349,26 @@ func (s *Store) QueryRecords(ctx context.Context, params QueryParams) (QueryResu
 		whereParts = append(whereParts, "r.modified_date <= ?")
 		args = append(args, params.ModifiedTo)
 	}
+	if params.JSONPath != "" || params.JSONValue != "" {
+		jsonParts := []string{"jf.row_num = r.row_num"}
+		if params.JSONPath != "" {
+			jsonParts = append(jsonParts, "jf.path = ?")
+			args = append(args, params.JSONPath)
+		}
+		if params.JSONValue != "" {
+			switch params.JSONOp {
+			case "", "eq":
+				jsonParts = append(jsonParts, "jf.value_text = ?")
+				args = append(args, params.JSONValue)
+			case "contains":
+				jsonParts = append(jsonParts, "jf.value_text LIKE ?")
+				args = append(args, "%"+params.JSONValue+"%")
+			default:
+				return QueryResult{}, fmt.Errorf("unsupported json_op %q", params.JSONOp)
+			}
+		}
+		whereParts = append(whereParts, "EXISTS (SELECT 1 FROM record_json_fields jf WHERE "+strings.Join(jsonParts, " AND ")+")")
+	}
 
 	ftsExpr := buildFTSExpr(params.Q)
 	if ftsExpr != "" {
@@ -527,6 +551,7 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 	schemaSQL := `
 		DROP TABLE IF EXISTS records;
 		DROP TABLE IF EXISTS records_fts;
+		DROP TABLE IF EXISTS record_json_fields;
 		DROP TABLE IF EXISTS metadata;
 
 		CREATE TABLE records (
@@ -557,6 +582,13 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 			status,
 			billing_country,
 			tokenize = 'unicode61'
+		);
+
+		CREATE TABLE record_json_fields (
+			row_num INTEGER NOT NULL,
+			path TEXT NOT NULL,
+			value_text TEXT NOT NULL,
+			value_type TEXT NOT NULL
 		);
 
 		CREATE TABLE metadata (
@@ -600,109 +632,316 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 			file_offset, line_length
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	recStmt, err := tx.PrepareContext(ctx, insertRecordSQL)
-	if err != nil {
-		return err
-	}
-	defer recStmt.Close()
+	insertJSONFieldSQL := `
+		INSERT INTO record_json_fields(row_num, path, value_text, value_type)
+		VALUES (?, ?, ?, ?)`
 
 	const batchSize = 25000
-	var lineNum int64
-	var insertedRows int64
-	var parseErrors int64
-	var fileOffset int64
+	type parseTask struct {
+		RowNum     int64
+		FileOffset int64
+		LineLen    int64
+		Payload    []byte
+	}
+	type parseResult struct {
+		RowNum     int64
+		FileOffset int64
+		LineLen    int64
+		Src        sourceRecord
+		Active     int
+		Deleted    int
+		Fields     []jsonIndexedField
+		ParseError bool
+	}
+	type writeOutcome struct {
+		InsertedRows int64
+		ParseErrors  int64
+		Err          error
+	}
 
+	ingestCtx, cancelIngest := context.WithCancel(ctx)
+	defer cancelIngest()
+
+	workerCount := indexParseWorkerCount()
+	tasks := make(chan parseTask, workerCount*8)
+	results := make(chan parseResult, workerCount*8)
+	outcomes := make(chan writeOutcome, 1)
+
+	var workers sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+
+			localFields := make([]jsonIndexedField, 0, 32)
+			for {
+				select {
+				case <-ingestCtx.Done():
+					return
+				case task, ok := <-tasks:
+					if !ok {
+						return
+					}
+
+					var doc any
+					if err := json.Unmarshal(task.Payload, &doc); err != nil {
+						select {
+						case results <- parseResult{RowNum: task.RowNum, ParseError: true}:
+						case <-ingestCtx.Done():
+						}
+						continue
+					}
+
+					obj, ok := doc.(map[string]any)
+					if !ok {
+						select {
+						case results <- parseResult{RowNum: task.RowNum, ParseError: true}:
+						case <-ingestCtx.Done():
+						}
+						continue
+					}
+
+					src := sourceRecord{
+						ID:             anyToString(obj["Id"]),
+						Name:           anyToString(obj["Name"]),
+						Type:           anyToString(obj["Type"]),
+						AttrType:       anyToString(obj["attributes_type"]),
+						Status:         anyToString(obj["vlocity_cmt__Status__c"]),
+						Segment:        anyToString(obj["Segment__c"]),
+						SalesChannel:   anyToString(obj["Sales_Channel__c"]),
+						BillingCity:    anyToString(obj["BillingCity"]),
+						BillingState:   anyToString(obj["BillingState"]),
+						BillingCountry: anyToString(obj["BillingCountry"]),
+						CountryCode:    anyToString(obj["CountryCode__c"]),
+						PostalCode:     anyToString(obj["BillingPostalCode"]),
+						CreatedDate:    anyToString(obj["CreatedDate"]),
+						ModifiedDate:   anyToString(obj["LastModifiedDate"]),
+					}
+
+					active := 0
+					if parseAnyBool(obj["IsActive"]) {
+						active = 1
+					}
+					deleted := 0
+					if parseAnyBool(obj["IsDeleted"]) {
+						deleted = 1
+					}
+					if src.Type == "" {
+						src.Type = src.AttrType
+					}
+					if src.BillingCountry == "" {
+						src.BillingCountry = src.CountryCode
+					}
+
+					localFields = localFields[:0]
+					collectJSONIndexedFields("", doc, &localFields)
+					fieldsCopy := append([]jsonIndexedField(nil), localFields...)
+
+					res := parseResult{
+						RowNum:     task.RowNum,
+						FileOffset: task.FileOffset,
+						LineLen:    task.LineLen,
+						Src:        src,
+						Active:     active,
+						Deleted:    deleted,
+						Fields:     fieldsCopy,
+					}
+					select {
+					case results <- res:
+					case <-ingestCtx.Done():
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
+	go func() {
+		var insertedRows int64
+		var parseErrors int64
+		var processedLines int64
+
+		recStmt, err := tx.PrepareContext(ingestCtx, insertRecordSQL)
+		if err != nil {
+			outcomes <- writeOutcome{Err: err}
+			return
+		}
+		jsonFieldStmt, err := tx.PrepareContext(ingestCtx, insertJSONFieldSQL)
+		if err != nil {
+			_ = recStmt.Close()
+			outcomes <- writeOutcome{Err: err}
+			return
+		}
+
+		closeStmts := func() error {
+			if err := recStmt.Close(); err != nil {
+				return err
+			}
+			if err := jsonFieldStmt.Close(); err != nil {
+				return err
+			}
+			return nil
+		}
+		reopenStmts := func() error {
+			var prepareErr error
+			recStmt, prepareErr = tx.PrepareContext(ingestCtx, insertRecordSQL)
+			if prepareErr != nil {
+				return prepareErr
+			}
+			jsonFieldStmt, prepareErr = tx.PrepareContext(ingestCtx, insertJSONFieldSQL)
+			if prepareErr != nil {
+				return prepareErr
+			}
+			return nil
+		}
+
+		for res := range results {
+			processedLines++
+			if res.ParseError {
+				parseErrors++
+			} else {
+				if _, err := recStmt.ExecContext(
+					ingestCtx,
+					res.RowNum,
+					res.Src.ID,
+					res.Src.Name,
+					res.Src.Type,
+					res.Src.Status,
+					res.Src.Segment,
+					res.Src.SalesChannel,
+					res.Src.BillingCity,
+					res.Src.BillingState,
+					res.Src.BillingCountry,
+					res.Src.PostalCode,
+					res.Src.CreatedDate,
+					res.Src.ModifiedDate,
+					res.Active,
+					res.Deleted,
+					res.FileOffset,
+					res.LineLen,
+				); err != nil {
+					cancelIngest()
+					outcomes <- writeOutcome{Err: err}
+					return
+				}
+
+				for _, field := range res.Fields {
+					if _, err := jsonFieldStmt.ExecContext(ingestCtx, res.RowNum, field.Path, field.ValueText, field.ValueType); err != nil {
+						cancelIngest()
+						outcomes <- writeOutcome{Err: err}
+						return
+					}
+				}
+				insertedRows++
+			}
+
+			if processedLines%batchSize == 0 {
+				if err := closeStmts(); err != nil {
+					cancelIngest()
+					outcomes <- writeOutcome{Err: err}
+					return
+				}
+				if err := commitBatch(); err != nil {
+					cancelIngest()
+					outcomes <- writeOutcome{Err: err}
+					return
+				}
+				if err := reopenStmts(); err != nil {
+					cancelIngest()
+					outcomes <- writeOutcome{Err: err}
+					return
+				}
+
+				fmt.Printf("indexed %,d rows...\n", processedLines)
+			}
+		}
+
+		if err := closeStmts(); err != nil {
+			outcomes <- writeOutcome{Err: err}
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			outcomes <- writeOutcome{Err: err}
+			return
+		}
+		outcomes <- writeOutcome{
+			InsertedRows: insertedRows,
+			ParseErrors:  parseErrors,
+		}
+	}()
+
+	var lineNum int64
+	var fileOffset int64
+	var readerErr error
+	var writerOutcome writeOutcome
+	writerOutcomeReady := false
+
+readLoop:
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) == 0 && readErr == io.EOF {
 			break
 		}
 		if len(line) == 0 && readErr != nil {
-			return readErr
+			readerErr = readErr
+			cancelIngest()
+			break
 		}
 
 		lineNum++
 		lineLen := int64(len(line))
 		payload := bytes.TrimRight(line, "\r\n")
 
-		var src sourceRecord
-		if err := json.Unmarshal(payload, &src); err != nil {
-			parseErrors++
-			fileOffset += lineLen
-			if readErr == io.EOF {
-				break
-			}
-			continue
+		task := parseTask{
+			RowNum:     lineNum,
+			FileOffset: fileOffset,
+			LineLen:    lineLen,
+			Payload:    append([]byte(nil), payload...),
 		}
-
-		active := 0
-		if parseBool(src.IsActive) {
-			active = 1
+		select {
+		case tasks <- task:
+		case writerOutcome = <-outcomes:
+			writerOutcomeReady = true
+			cancelIngest()
+			break readLoop
+		case <-ingestCtx.Done():
+			break readLoop
 		}
-		deleted := 0
-		if parseBool(src.IsDeleted) {
-			deleted = 1
-		}
-		if src.Type == "" {
-			src.Type = src.AttrType
-		}
-		if src.BillingCountry == "" {
-			src.BillingCountry = src.CountryCode
-		}
-
-		if _, err := recStmt.ExecContext(
-			ctx,
-			lineNum,
-			src.ID,
-			src.Name,
-			src.Type,
-			src.Status,
-			src.Segment,
-			src.SalesChannel,
-			src.BillingCity,
-			src.BillingState,
-			src.BillingCountry,
-			src.PostalCode,
-			src.CreatedDate,
-			src.ModifiedDate,
-			active,
-			deleted,
-			fileOffset,
-			lineLen,
-		); err != nil {
-			return err
-		}
-		insertedRows++
 
 		fileOffset += lineLen
-
-		if lineNum%batchSize == 0 {
-			if err := recStmt.Close(); err != nil {
-				return err
-			}
-			if err := commitBatch(); err != nil {
-				return err
-			}
-
-			recStmt, err = tx.PrepareContext(ctx, insertRecordSQL)
-			if err != nil {
-				return err
-			}
-
-			fmt.Printf("indexed %,d rows...\n", lineNum)
-		}
 
 		if readErr == io.EOF {
 			break
 		}
+		if readErr != nil {
+			readerErr = readErr
+			cancelIngest()
+			break
+		}
+	}
+	close(tasks)
+
+	if !writerOutcomeReady {
+		writerOutcome = <-outcomes
+		writerOutcomeReady = true
 	}
 
-	if err := recStmt.Close(); err != nil {
-		return err
+	if writerOutcome.Err != nil {
+		_ = tx.Rollback()
+		return writerOutcome.Err
 	}
-	if err := tx.Commit(); err != nil {
-		return err
+	if readerErr != nil {
+		_ = tx.Rollback()
+		return readerErr
 	}
+
+	insertedRows := writerOutcome.InsertedRows
+	parseErrors := writerOutcome.ParseErrors
 
 	// Bulk-load FTS in one statement to avoid per-row virtual table write overhead.
 	if _, err := s.db.ExecContext(ctx, `
@@ -720,6 +959,9 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 		CREATE INDEX idx_records_city ON records(billing_city);
 		CREATE INDEX idx_records_modified ON records(modified_date);
 		CREATE INDEX idx_records_active ON records(is_active);
+		CREATE INDEX idx_json_fields_path_value ON record_json_fields(path, value_text);
+		CREATE INDEX idx_json_fields_value ON record_json_fields(value_text);
+		CREATE INDEX idx_json_fields_row ON record_json_fields(row_num);
 	`
 	if _, err := s.db.ExecContext(ctx, indexSQL); err != nil {
 		return err
@@ -842,6 +1084,36 @@ func (s *Store) distinctValues(ctx context.Context, field string, limit int) ([]
 			return nil, err
 		}
 		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) JSONPaths(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT path
+		FROM record_json_fields
+		GROUP BY path
+		ORDER BY COUNT(1) DESC, path ASC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]string, 0, limit)
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		out = append(out, path)
 	}
 	return out, rows.Err()
 }
@@ -985,7 +1257,11 @@ func (s *Store) analyticsFieldSpec(ctx context.Context, field string) (analytics
 }
 
 func (s *Store) analyticsFieldSpecs(ctx context.Context) ([]analyticsFieldSpec, error) {
-	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(records)`)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT name
+		FROM pragma_table_info('records')
+		WHERE name NOT IN ('row_num', 'file_offset', 'line_length')
+		ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -993,18 +1269,10 @@ func (s *Store) analyticsFieldSpecs(ctx context.Context) ([]analyticsFieldSpec, 
 
 	specs := make([]analyticsFieldSpec, 0, 12)
 	for rows.Next() {
-		var cid int
 		var name string
-		var colType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
 
-		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &primaryKey); err != nil {
+		if err := rows.Scan(&name); err != nil {
 			return nil, err
-		}
-		if _, skip := analyticsExcludedColumns[name]; skip {
-			continue
 		}
 
 		specs = append(specs, analyticsFieldSpec{
@@ -1016,9 +1284,6 @@ func (s *Store) analyticsFieldSpecs(ctx context.Context) ([]analyticsFieldSpec, 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	sort.Slice(specs, func(i, j int) bool {
-		return specs[i].Name < specs[j].Name
-	})
 	return specs, nil
 }
 
@@ -1047,6 +1312,88 @@ func analyticsValueExpr(column string) string {
 
 func analyticsQuoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+func anyToString(v any) string {
+	switch value := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return value
+	case bool:
+		if value {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64)
+	default:
+		return fmt.Sprintf("%v", value)
+	}
+}
+
+func parseAnyBool(v any) bool {
+	switch value := v.(type) {
+	case bool:
+		return value
+	case float64:
+		return value != 0
+	case string:
+		return parseBool(value)
+	default:
+		return false
+	}
+}
+
+func collectJSONIndexedFields(path string, value any, out *[]jsonIndexedField) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			nextPath := key
+			if path != "" {
+				nextPath = path + "." + key
+			}
+			collectJSONIndexedFields(nextPath, child, out)
+		}
+	case []any:
+		for i, child := range v {
+			nextPath := fmt.Sprintf("[%d]", i)
+			if path != "" {
+				nextPath = fmt.Sprintf("%s[%d]", path, i)
+			}
+			collectJSONIndexedFields(nextPath, child, out)
+		}
+	case string:
+		appendJSONIndexedField(path, v, "string", out)
+	case float64:
+		appendJSONIndexedField(path, strconv.FormatFloat(v, 'f', -1, 64), "number", out)
+	case bool:
+		appendJSONIndexedField(path, strconv.FormatBool(v), "bool", out)
+	case nil:
+		appendJSONIndexedField(path, "null", "null", out)
+	}
+}
+
+func appendJSONIndexedField(path, valueText, valueType string, out *[]jsonIndexedField) {
+	if path == "" {
+		path = "$"
+	}
+	*out = append(*out, jsonIndexedField{
+		Path:      path,
+		ValueText: valueText,
+		ValueType: valueType,
+	})
+}
+
+func indexParseWorkerCount() int {
+	n := runtime.NumCPU()
+	if n < 2 {
+		return 2
+	}
+	if n > 12 {
+		return 12
+	}
+	return n
 }
 
 func parseBool(v string) bool {

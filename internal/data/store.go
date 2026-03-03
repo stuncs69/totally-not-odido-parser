@@ -554,22 +554,13 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 			file_offset, line_length
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	insertFTSSQL := `
-		INSERT INTO records_fts(rowid, id, name, billing_city, type, status, billing_country)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`
-
 	recStmt, err := tx.PrepareContext(ctx, insertRecordSQL)
 	if err != nil {
 		return err
 	}
 	defer recStmt.Close()
-	ftsStmt, err := tx.PrepareContext(ctx, insertFTSSQL)
-	if err != nil {
-		return err
-	}
-	defer ftsStmt.Close()
 
-	const batchSize = 2500
+	const batchSize = 25000
 	var lineNum int64
 	var insertedRows int64
 	var parseErrors int64
@@ -635,19 +626,6 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 		); err != nil {
 			return err
 		}
-
-		if _, err := ftsStmt.ExecContext(
-			ctx,
-			lineNum,
-			src.ID,
-			src.Name,
-			src.BillingCity,
-			src.Type,
-			src.Status,
-			src.BillingCountry,
-		); err != nil {
-			return err
-		}
 		insertedRows++
 
 		fileOffset += lineLen
@@ -656,18 +634,11 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 			if err := recStmt.Close(); err != nil {
 				return err
 			}
-			if err := ftsStmt.Close(); err != nil {
-				return err
-			}
 			if err := commitBatch(); err != nil {
 				return err
 			}
 
 			recStmt, err = tx.PrepareContext(ctx, insertRecordSQL)
-			if err != nil {
-				return err
-			}
-			ftsStmt, err = tx.PrepareContext(ctx, insertFTSSQL)
 			if err != nil {
 				return err
 			}
@@ -683,10 +654,15 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 	if err := recStmt.Close(); err != nil {
 		return err
 	}
-	if err := ftsStmt.Close(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+
+	// Bulk-load FTS in one statement to avoid per-row virtual table write overhead.
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO records_fts(rowid, id, name, billing_city, type, status, billing_country)
+		SELECT row_num, id, name, billing_city, type, status, billing_country
+		FROM records`); err != nil {
 		return err
 	}
 

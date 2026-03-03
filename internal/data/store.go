@@ -633,6 +633,7 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	const batchSize = 1000000
+	const progressEvery = 50000
 	const jsonFieldInsertBatch = 256
 	type parseTask struct {
 		RowNum     int64
@@ -894,8 +895,9 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 					outcomes <- writeOutcome{Err: err}
 					return
 				}
-
-				fmt.Printf("indexed %d rows...\n", processedLines)
+			}
+			if processedLines%progressEvery == 0 {
+				fmt.Printf("processed %d lines...\n", processedLines)
 			}
 		}
 

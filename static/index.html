@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dataset Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  <header class="topbar">
+    <div>
+      <h1>Dataset Explorer</h1>
+      <p class="sub">Fast browsing for <code>dataset.txt</code> via indexed Go API</p>
+    </div>
+    <div class="health">
+      <span class="dot" id="health-dot"></span>
+      <span id="health-text">checking backend...</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel filters">
+      <h2>Query</h2>
+      <label>
+        Keyword
+        <input id="q" type="text" placeholder="Name, ID, city..." />
+      </label>
+      <label>
+        Type
+        <select id="type">
+          <option value="">Any</option>
+        </select>
+      </label>
+      <label>
+        Status
+        <select id="status">
+          <option value="">Any</option>
+        </select>
+      </label>
+      <label>
+        Country
+        <select id="country">
+          <option value="">Any</option>
+        </select>
+      </label>
+      <label>
+        Active
+        <select id="active">
+          <option value="">Any</option>
+          <option value="true">Active only</option>
+          <option value="false">Inactive only</option>
+        </select>
+      </label>
+      <label>
+        Sort
+        <select id="sort">
+          <option value="">Modified (newest)</option>
+          <option value="modified_asc">Modified (oldest)</option>
+          <option value="name_asc">Name (A-Z)</option>
+          <option value="name_desc">Name (Z-A)</option>
+          <option value="city_asc">City (A-Z)</option>
+          <option value="city_desc">City (Z-A)</option>
+        </select>
+      </label>
+      <div class="actions">
+        <button id="apply">Apply</button>
+        <button id="reset" class="ghost">Reset</button>
+      </div>
+      <div class="hint">
+        Uses full-text search for the keyword box.
+      </div>
+    </aside>
+
+    <section class="content">
+      <div class="stats-grid">
+        <article class="panel stat">
+          <h3>Total Rows</h3>
+          <p id="stat-total">-</p>
+        </article>
+        <article class="panel stat">
+          <h3>Active Rows</h3>
+          <p id="stat-active">-</p>
+        </article>
+        <article class="panel stat">
+          <h3>Inactive Rows</h3>
+          <p id="stat-inactive">-</p>
+        </article>
+        <article class="panel stat">
+          <h3>Latest Modified</h3>
+          <p id="stat-latest">-</p>
+        </article>
+      </div>
+
+      <article class="panel table-panel">
+        <div class="table-head">
+          <h2>Results</h2>
+          <div id="result-meta">Loading...</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Row</th>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>City</th>
+                <th>Country</th>
+                <th>Modified</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <button id="prev" class="ghost">Prev</button>
+          <span id="page-indicator">Page 1</span>
+          <button id="next" class="ghost">Next</button>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <dialog id="detail-dialog">
+    <form method="dialog" class="dialog-head">
+      <h3 id="detail-title">Record</h3>
+      <button class="ghost">Close</button>
+    </form>
+    <pre id="detail-json"></pre>
+  </dialog>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

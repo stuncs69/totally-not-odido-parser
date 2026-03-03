@@ -632,16 +632,19 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 			file_offset, line_length
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	insertJSONFieldSQL := `
-		INSERT INTO record_json_fields(row_num, path, value_text, value_type)
-		VALUES (?, ?, ?, ?)`
-
-	const batchSize = 25000
+	const batchSize = 1000000
+	const jsonFieldInsertBatch = 256
 	type parseTask struct {
 		RowNum     int64
 		FileOffset int64
 		LineLen    int64
 		Payload    []byte
+	}
+	type jsonFieldWrite struct {
+		RowNum    int64
+		Path      string
+		ValueText string
+		ValueType string
 	}
 	type parseResult struct {
 		RowNum     int64
@@ -771,18 +774,10 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 			outcomes <- writeOutcome{Err: err}
 			return
 		}
-		jsonFieldStmt, err := tx.PrepareContext(ingestCtx, insertJSONFieldSQL)
-		if err != nil {
-			_ = recStmt.Close()
-			outcomes <- writeOutcome{Err: err}
-			return
-		}
+		pendingJSONFields := make([]jsonFieldWrite, 0, 4096)
 
 		closeStmts := func() error {
 			if err := recStmt.Close(); err != nil {
-				return err
-			}
-			if err := jsonFieldStmt.Close(); err != nil {
 				return err
 			}
 			return nil
@@ -793,9 +788,38 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 			if prepareErr != nil {
 				return prepareErr
 			}
-			jsonFieldStmt, prepareErr = tx.PrepareContext(ingestCtx, insertJSONFieldSQL)
-			if prepareErr != nil {
-				return prepareErr
+			return nil
+		}
+		flushJSONFieldChunk := func(chunk []jsonFieldWrite) error {
+			if len(chunk) == 0 {
+				return nil
+			}
+
+			var sqlBuilder strings.Builder
+			sqlBuilder.Grow(96 + len(chunk)*12)
+			sqlBuilder.WriteString("INSERT INTO record_json_fields(row_num, path, value_text, value_type) VALUES ")
+			args := make([]any, 0, len(chunk)*4)
+			for i, item := range chunk {
+				if i > 0 {
+					sqlBuilder.WriteString(",")
+				}
+				sqlBuilder.WriteString("(?, ?, ?, ?)")
+				args = append(args, item.RowNum, item.Path, item.ValueText, item.ValueType)
+			}
+
+			_, err := tx.ExecContext(ingestCtx, sqlBuilder.String(), args...)
+			return err
+		}
+		flushAllPendingJSONFields := func() error {
+			for len(pendingJSONFields) > 0 {
+				end := jsonFieldInsertBatch
+				if len(pendingJSONFields) < end {
+					end = len(pendingJSONFields)
+				}
+				if err := flushJSONFieldChunk(pendingJSONFields[:end]); err != nil {
+					return err
+				}
+				pendingJSONFields = pendingJSONFields[end:]
 			}
 			return nil
 		}
@@ -831,16 +855,30 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 				}
 
 				for _, field := range res.Fields {
-					if _, err := jsonFieldStmt.ExecContext(ingestCtx, res.RowNum, field.Path, field.ValueText, field.ValueType); err != nil {
-						cancelIngest()
-						outcomes <- writeOutcome{Err: err}
-						return
+					pendingJSONFields = append(pendingJSONFields, jsonFieldWrite{
+						RowNum:    res.RowNum,
+						Path:      field.Path,
+						ValueText: field.ValueText,
+						ValueType: field.ValueType,
+					})
+					if len(pendingJSONFields) >= jsonFieldInsertBatch {
+						if err := flushJSONFieldChunk(pendingJSONFields[:jsonFieldInsertBatch]); err != nil {
+							cancelIngest()
+							outcomes <- writeOutcome{Err: err}
+							return
+						}
+						pendingJSONFields = pendingJSONFields[jsonFieldInsertBatch:]
 					}
 				}
 				insertedRows++
 			}
 
 			if processedLines%batchSize == 0 {
+				if err := flushAllPendingJSONFields(); err != nil {
+					cancelIngest()
+					outcomes <- writeOutcome{Err: err}
+					return
+				}
 				if err := closeStmts(); err != nil {
 					cancelIngest()
 					outcomes <- writeOutcome{Err: err}
@@ -857,10 +895,14 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 					return
 				}
 
-				fmt.Printf("indexed %,d rows...\n", processedLines)
+				fmt.Printf("indexed %d rows...\n", processedLines)
 			}
 		}
 
+		if err := flushAllPendingJSONFields(); err != nil {
+			outcomes <- writeOutcome{Err: err}
+			return
+		}
 		if err := closeStmts(); err != nil {
 			outcomes <- writeOutcome{Err: err}
 			return
